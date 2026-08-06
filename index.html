@@ -1,0 +1,1697 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiniHack codewm — 턴 스크러버 run 뷰어</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%230f1115'/><text x='8' y='12' font-size='11' text-anchor='middle' fill='%237ee2a0'>@</text></svg>">
+<style>
+  /* ---------------------------------------------------------------- tokens
+     One scale for space (4px steps), one radius pair, one font ladder, and one
+     palette in which a colour *means* something. Decoration never borrows a
+     semantic hue: 성공/거부/보상/사망/repair/거부강행/스테이지 own theirs. */
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1d212b; --sunk: #05070a;
+    --line: #2a2f3a; --line2: #39404e;
+    --ink: #e8e9ec; --ink2: #9aa1ad; --ink3: #6a7180;
+
+    /* semantic — fill (bands, chips) and ink (text, badges) of one meaning */
+    --ok: #35563c;      --ok-ink: #8fd79a;
+    --refused: #5c4a1e; --refused-ink: #e6c46a;
+    --reward: #2f9e63;  --reward-ink: #7ee2a0;
+    --death: #b3312f;   --death-ink: #ff9a9a;
+    --repair: #6d51b8;  --repair-ink: #c1a8ff;
+    --veto: #a4402c;    --veto-ink: #f0a68f;
+    --stage: #2f7fa8;   --stage-ink: #6cd7ff;
+    --gem: #6cd7ff;     /* the one accent: links, focus, current */
+
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px;
+    --r1: 6px; --r2: 10px;
+    --f1: 11px; --f2: 12.5px; --f3: 14px; --f4: 17px;
+    --mono: "SF Mono", Consolas, "DejaVu Sans Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  /* Panes here are switched with the `hidden` attribute, and every one of them
+     also sets its own `display` — which would win against the UA sheet and
+     leave a "hidden" element on screen. */
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: var(--f3)/1.5 -apple-system, "Segoe UI", "Noto Sans KR", sans-serif; }
+
+  button, select, input[type=range] { font-family: inherit; }
+  button, select { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: var(--r1); padding: 4px 10px; font-size: 13px; cursor: pointer; }
+  button:hover, select:hover { border-color: var(--line2); }
+  button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--gem); outline-offset: 1px; }
+  button.primary { background: var(--gem); border-color: var(--gem); color: #0b0d12; font-weight: 650; }
+  button.primary:hover { filter: brightness(1.08); }
+  .muted { color: var(--ink3); }
+  code { background: var(--panel2); border-radius: 4px; padding: 0 4px; }
+
+  /* ---------------------------------------------------------------- header */
+  header { padding: var(--s3) var(--s5) var(--s2); border-bottom: 1px solid var(--line); }
+  header .toprow { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: var(--f4); font-weight: 650; letter-spacing: -.01em; }
+  header .tagline { color: var(--ink3); font-size: var(--f2); }
+  #runswitch { display: flex; gap: var(--s1); flex-wrap: wrap; margin-left: auto; }
+  #runswitch button { font-size: var(--f2); padding: 3px 10px; }
+  #runswitch button.active { background: var(--gem); color: #0b0d12; border-color: var(--gem); font-weight: 650; }
+  .chips { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); font-size: var(--f2);
+    color: var(--ink2); margin-top: var(--s2); align-items: center; }
+  .chips b { color: var(--ink); font-weight: 600; }
+  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 99px; padding: 2px 10px; }
+  .chip.good { border-color: #2f6b43; background: #16281d; color: #a8e8c0; }
+  .chip.warn { border-color: #6a3b30; background: #2a1c18; color: #f0a68f; }
+  #intro { margin-top: var(--s2); background: transparent; border: 0; padding: 0; }
+  #intro > summary { font-weight: 600; color: var(--gem); font-size: var(--f2); list-style: none; }
+  #intro > summary::-webkit-details-marker { display: none; }
+  #intro > summary::before { content: "▸ "; }
+  #intro[open] > summary::before { content: "▾ "; }
+  #intro .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: var(--s4); margin-top: var(--s3); font-size: var(--f2); color: var(--ink2); line-height: 1.6;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r2); padding: var(--s3) var(--s4); }
+  #intro h4 { margin: 0 0 var(--s1); font-size: var(--f2); color: var(--ink); }
+  #intro h4 + p, #intro p { margin: 0 0 var(--s2); }
+  #intro b { color: var(--ink); }
+  table.keys { border-collapse: collapse; width: 100%; font-size: var(--f1); }
+  table.keys td { border-top: 1px solid var(--line); padding: 3px 8px 3px 0; vertical-align: top; }
+  table.keys td:first-child { font-family: var(--mono); color: var(--ink); white-space: nowrap; }
+  kbd { font-family: var(--mono); font-size: var(--f1); background: var(--panel2);
+    border: 1px solid var(--line2); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; color: var(--ink); }
+
+  table.grid { border-collapse: collapse; width: 100%; font-size: var(--f2); }
+  table.grid th { text-align: left; color: var(--ink2); font-weight: 600; padding: 4px 10px 4px 0;
+    border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table.grid td { border-top: 1px solid var(--line); padding: 4px 10px 4px 0; vertical-align: top; }
+  table.grid td:first-child { font-family: var(--mono); white-space: nowrap; }
+  table.grid a { color: var(--gem); cursor: pointer; text-decoration: underline dotted; }
+
+  /* -------------------------------------------------------------- timeline */
+  #timeline { padding: var(--s2) var(--s5) var(--s2); border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #12151b, var(--bg)); }
+  #ctl { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+  #ctl .grp { display: flex; align-items: center; gap: var(--s1); }
+  #turnlabel { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px;
+    white-space: nowrap; }
+  #turnlabel .now { color: var(--gem); }
+  #turnlabel .act { font-family: var(--mono); color: var(--ok-ink); }
+  #turnslider { flex: 1 1 220px; min-width: 160px; accent-color: var(--gem); }
+  .toggle { display: inline-flex; align-items: center; gap: 5px; font-size: var(--f1);
+    color: var(--ink2); cursor: pointer; user-select: none; white-space: nowrap;
+    border: 1px solid var(--line); border-radius: var(--r1); padding: 3px 8px; background: var(--panel2); }
+  .toggle input { accent-color: var(--gem); margin: 0; }
+  .toggle:hover { border-color: var(--line2); }
+
+  /* Four lanes over one clock, stacked tight so they read as one instrument:
+     stage (where in the chain) / ask (which decision) / turn (the world's own
+     step) / events (the handful of moments worth jumping to). */
+  .lanes { margin-top: var(--s2); display: grid; gap: 3px; }
+  #stagelane { display: flex; height: 20px; border-radius: var(--r1); overflow: hidden;
+    border: 1px solid var(--line); }
+  #stagelane .sg { position: relative; min-width: 0; cursor: pointer; display: flex;
+    align-items: center; justify-content: center; font: 650 10px/1 var(--mono);
+    color: var(--ink2); background: var(--panel2); border-right: 1px solid var(--bg); overflow: hidden; }
+  #stagelane .sg:last-child { border-right: 0; }
+  #stagelane .sg:hover { background: #262c39; color: var(--ink); }
+  #stagelane .sg.solved { background: #17301f; color: #a8e8c0; }
+  #stagelane .sg.pits { background: #2c2413; color: var(--refused-ink); }
+  #stagelane .sg.on { background: var(--stage); color: #04121a; box-shadow: inset 0 0 0 1px #bfeaff; }
+  #asktrack { display: flex; height: 12px; border-radius: 3px; overflow: hidden; }
+  #asktrack .seg { cursor: pointer; opacity: .62; min-width: 0; box-shadow: inset -1px 0 0 var(--bg); }
+  #asktrack .seg:hover { opacity: .92; }
+  #asktrack .seg.on { opacity: 1; box-shadow: inset 0 0 0 1px #fff; z-index: 1; }
+  .k-proposal { background: var(--refused-ink); } .k-repair { background: var(--repair-ink); }
+  .k-repair.rejected { background: var(--veto-ink); }
+  /* One canvas, not 3,000 divs: at 1400px a turn is a third of a pixel wide, so
+     the strip is *aggregated* per pixel column instead of pretending each turn
+     has a cell of its own. */
+  #turnwrap { position: relative; height: 26px; border-radius: 3px; overflow: visible;
+    background: var(--panel2); cursor: ew-resize; }
+  #turncanvas { display: block; width: 100%; height: 26px; border-radius: 3px; }
+  /* One cursor for all four lanes: it overhangs its own band by exactly the
+     ask track above and the event lane below, so the four read as one ruler. */
+  #turncursor { position: absolute; top: -15px; bottom: -18px; width: 2px; margin-left: -1px;
+    background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.75); pointer-events: none; z-index: 3; }
+  #turntip { position: absolute; bottom: 32px; z-index: 6; pointer-events: none;
+    background: #0b0e14; border: 1px solid var(--line2); border-radius: var(--r1);
+    padding: 5px 9px; font-size: var(--f1); line-height: 1.5; color: var(--ink);
+    white-space: nowrap; box-shadow: 0 8px 20px -10px #000; }
+  #events { position: relative; height: 15px; }
+  #events b { position: absolute; top: 2px; width: 0; height: 0; cursor: pointer;
+    border-left: 4px solid transparent; border-right: 4px solid transparent;
+    border-top: 9px solid; transform: translateX(-50%); }
+  #events b:hover { filter: brightness(1.4); }
+  #events b.hot { animation: pop .9s ease-out; }
+  @keyframes pop { 0% { transform: translateX(-50%) scale(2.1); } 100% { transform: translateX(-50%) scale(1); } }
+  .e-stage { border-top-color: var(--stage-ink); } .e-pit { border-top-color: var(--reward-ink); }
+  .e-repair { border-top-color: var(--repair-ink); } .e-rejected { border-top-color: var(--veto-ink); }
+  .e-dead { border-top-color: var(--death-ink); } .e-veto { border-top-color: var(--veto-ink); }
+  .e-end { border-top-color: var(--ink2); }
+  #legend { display: flex; gap: var(--s1) var(--s3); font-size: var(--f1); color: var(--ink2);
+    margin-top: var(--s1); flex-wrap: wrap; align-items: center; }
+  #legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+    margin-right: 4px; vertical-align: -1px; }
+  #legend .sep { color: var(--ink3); }
+  #evnav { margin-left: auto; display: flex; align-items: center; gap: 5px; }
+  #evnav button { padding: 1px 7px; font-size: var(--f1); }
+  #evnow { font-size: var(--f1); color: var(--ink); min-width: 190px; display: inline-block;
+    text-align: right; }
+
+  /* ------------------------------------------------------------- narration */
+  #narration { padding: var(--s2) var(--s5); border-bottom: 1px solid var(--line);
+    background: var(--panel); display: grid; gap: var(--s1); }
+  #narwho { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+    font-size: var(--f2); color: var(--ink2); min-height: 22px; }
+  #narwho .who { font: 650 var(--f2)/1.3 var(--mono); padding: 2px var(--s2);
+    border-radius: var(--r1); background: var(--panel2); border: 1px solid var(--line); color: var(--ink); }
+  #narwho .doing { color: var(--ink); }
+  #narwho .doing b { font-family: var(--mono); color: var(--ok-ink); font-size: 13px; }
+  #narwho .gain { color: var(--reward-ink); font-weight: 650; }
+  #narwho .drop { color: var(--ink3); font-variant-numeric: tabular-nums; }
+  #narwho .said { color: #e8d9a8; font: italic var(--f2)/1.4 var(--mono); }
+  #narwhy { font-size: 13px; line-height: 1.5; color: var(--ink); min-height: 20px; }
+  #narwhy .lead { color: var(--ink2); }
+  #narwhy b { font-weight: 600; }
+  #narwhy.dim { color: var(--ink3); }
+
+  /* ------------------------------------------------------------------ main
+     ① the moving board ② what happened this turn ③ the code it was writing.
+     A run with no program (a0) drops the third column instead of leaving a
+     third of the screen holding one sentence. */
+  main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, .95fr) minmax(0, 1.05fr); }
+  body.nocode main { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+  body.nocode #codepane { display: none; }
+  main > section { padding: var(--s3) var(--s4); min-width: 0; }
+  #worldpane, #turnpane { border-right: 1px solid var(--line); }
+  .panetitle { margin: 0 0 var(--s2); font-size: var(--f2); color: var(--ink2); font-weight: 600;
+    display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap; }
+  .panetitle b { color: var(--ink); }
+
+  #boardhead { display: flex; flex-wrap: wrap; gap: var(--s1) 6px; align-items: center;
+    margin-bottom: var(--s2); }
+  /* The replayed tile board — the hero of the page. Fixed frame so the layout
+     does not jump when a chain stage changes the level's size; the canvas is
+     centred inside it and scaled to fit. Nearest-neighbour on purpose: this is
+     16px tile art, and smoothing it would be an interpolation nobody drew. */
+  #pixelframe { background: var(--sunk); border: 1px solid var(--line); border-radius: var(--r2);
+    padding: var(--s3); min-height: 320px; display: flex; align-items: center;
+    justify-content: center; overflow: hidden; }
+  #boardcanvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges;
+    border-radius: 3px; }
+  #pixelmiss { font-size: var(--f2); color: var(--ink3); text-align: center; max-width: 34ch; }
+  #boardstatus { color: var(--stage-ink); font: 12px/1.5 var(--mono); margin-top: 6px;
+    display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+  #boardtools { display: flex; gap: var(--s1) var(--s3); align-items: center; flex-wrap: wrap;
+    margin-top: 6px; font-size: var(--f1); color: var(--ink2); }
+  #boardtools .key { display: inline-flex; align-items: center; gap: 5px; }
+  #boardtools .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+    border: 2px solid; box-sizing: border-box; }
+
+  details.fold { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r2);
+    padding: var(--s2) var(--s3); margin-top: var(--s2); }
+  details.fold > summary { cursor: pointer; color: var(--ink2); font-size: var(--f2); font-weight: 600; }
+  details.fold > summary:hover { color: var(--ink); }
+  details.fold[open] > summary { margin-bottom: var(--s2); }
+  #asciihead { font-size: var(--f1); color: var(--ink3); margin-bottom: 5px;
+    display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .asciibody { background: var(--sunk); border: 1px solid var(--line); border-radius: var(--r1);
+    padding: var(--s2); overflow: auto; max-height: 250px; }
+  .asciibody.stale { opacity: .6; }
+  .asciibody pre { margin: 0; font: 12px/1.15 var(--mono); letter-spacing: .06em; }
+  /* The game's own sentence is prose and wraps; the map underneath never may. */
+  #boardmsgline:not(:empty) { color: #e8d9a8; font: italic 12px/1.45 var(--mono);
+    white-space: pre-wrap; margin-bottom: 6px; }
+  .asciibody .me { outline: 1px solid #fff; border-radius: 2px; }
+  .asciibody .went { background: #1f4030; outline: 1px solid var(--ok-ink); border-radius: 2px; }
+  .asciibody .bumped { background: #45231e; outline: 1px solid var(--veto-ink); border-radius: 2px; }
+  .asciibody .status { color: var(--stage-ink); }
+  .asciibody .sentence { font: 13px/1.6 inherit; color: var(--ink2); }
+  #boardlegend { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); margin-top: var(--s2);
+    font-size: var(--f1); color: var(--ink2); }
+  #boardlegend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+    margin-right: 4px; vertical-align: -1px; border: 1px solid var(--line); }
+  #boardlegend .glyphs { font-family: var(--mono); color: var(--ink3); }
+  #pixelnote { font-size: var(--f1); line-height: 1.65; color: var(--ink2); }
+  #pixelnote b { color: var(--ink); }
+
+  .badge { border-radius: var(--r1); padding: 2px var(--s2); font-weight: 600; font-size: var(--f2);
+    display: inline-block; white-space: nowrap; }
+  .b-ok { background: #24402a; color: var(--ok-ink); }
+  .b-refused { background: #453a1e; color: var(--refused-ink); }
+  .b-dead { background: #4a1f1f; color: var(--death-ink); }
+  .b-repair { background: #2b2440; color: var(--repair-ink); }
+  .b-obs { background: #1e3048; color: #9cc4f0; }
+  .b-fail { background: #45231e; color: var(--veto-ink); }
+  .b-reward { background: #1f4030; color: var(--reward-ink); }
+  .b-replay { background: var(--panel2); color: var(--ink2); border: 1px solid var(--line);
+    font-weight: 500; }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r2);
+    padding: var(--s2) var(--s3); margin-bottom: var(--s2); }
+  .card:last-child { margin-bottom: 0; }
+  .card h3 { margin: 0 0 6px; font-size: var(--f2); color: var(--ink2); font-weight: 600; }
+  .card h3 .tone { color: var(--ink); }
+  .bigact { font: 650 20px/1.2 var(--mono); color: var(--ok-ink); margin-bottom: 6px; }
+  .bigact.refused { color: var(--refused-ink); }
+  .flags { display: flex; flex-wrap: wrap; gap: var(--s1); margin-bottom: var(--s2); }
+  .stats { display: grid; grid-template-columns: auto 1fr; gap: 3px var(--s3); font-size: var(--f2);
+    color: var(--ink2); }
+  .stats b { color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .lineage { font-size: var(--f2); color: var(--ink2); }
+  .lineage a { color: var(--gem); cursor: pointer; text-decoration: underline dotted; }
+
+  /* one cell per turn of the governing ask: where the course ran, stalled, died */
+  .stepstrip { display: flex; height: 12px; margin-top: var(--s2); border-radius: 3px; overflow: hidden; }
+  .stepstrip i { flex: 1 1 0; min-width: 0; cursor: pointer; opacity: .75; }
+  .stepstrip i:hover { opacity: 1; }
+  .stepstrip i.cur { opacity: 1; box-shadow: inset 0 0 0 1px #fff; z-index: 1; }
+  .s-ok { background: var(--ok); } .s-refused { background: var(--refused); }
+  .s-dead { background: var(--death); } .s-reward { background: var(--reward); }
+  .s-repair { background: var(--repair); }
+  .cmds { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; max-height: 120px; overflow: auto; }
+  .cmds i { font: 11px/1.3 var(--mono); font-style: normal; padding: 1px 5px; border-radius: 4px;
+    cursor: pointer; background: var(--panel2); color: var(--ink2); border: 1px solid transparent; }
+  .cmds i.k-refused { color: var(--refused-ink); } .cmds i.k-dead { color: var(--death-ink); }
+  .cmds i.cur { border-color: #fff; color: var(--ink); font-weight: 650; }
+
+  /* ------------------------------------------------------------ code panel */
+  #codetabs { display: flex; flex-wrap: wrap; gap: var(--s1); margin-bottom: var(--s2); }
+  #codetabs button { font: 11px/1.3 var(--mono); padding: 3px var(--s2); }
+  #codetabs button.on { background: var(--repair-ink); color: #0b0d12;
+    border-color: var(--repair-ink); font-weight: 650; }
+  #codemeta { font-size: var(--f1); color: var(--ink2); margin-bottom: 6px; line-height: 1.7; }
+  #codemeta a { color: var(--gem); cursor: pointer; text-decoration: underline dotted; }
+  #codebody { margin: 0; background: var(--sunk); border: 1px solid var(--line);
+    border-radius: var(--r2); padding: var(--s2); font: 11px/1.45 var(--mono); white-space: pre;
+    overflow: auto; max-height: 520px; min-height: 300px; color: var(--ink); }
+  /* The diff, coloured the way a code review is. Each line also carries its own
+     +/- mark, so the two are still told apart in greyscale. */
+  #codebody .d-add { display: block; background: #0d2f1c; color: #b6f0c8; }
+  #codebody .d-del { display: block; background: #3a1418; color: #f7b4ae; }
+  #codebody .d-ctx { display: block; color: var(--ink2); }
+  #codebody .d-skip { display: block; color: #5a6672; background: #0a0e14;
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  #codebody .mark { display: inline-block; width: 1.2em; opacity: .8; }
+  #codeview { display: inline-flex; gap: var(--s1); margin-left: var(--s2); vertical-align: middle; }
+  #codeview button { font: 10.5px/1 var(--mono); padding: 3px 7px; border-radius: 5px;
+    border: 1px solid var(--line); background: transparent; color: var(--ink2); cursor: pointer; }
+  #codeview button.on { background: var(--ink2); color: var(--sunk); border-color: var(--ink2); }
+  #codemeta .plus { color: var(--reward-ink); } #codemeta .minus { color: var(--veto-ink); }
+
+  /* ----------------------------------------------------------------- bottom */
+  #bottom { border-top: 1px solid var(--line); padding: var(--s3) var(--s5) var(--s6);
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s3); }
+  #story { max-height: 380px; overflow: auto; display: grid; gap: 2px; }
+  #story .blk { font-size: var(--f2); line-height: 1.45; padding: var(--s1) var(--s2);
+    border-radius: var(--r1); border-left: 3px solid transparent; cursor: pointer; color: var(--ink2); }
+  #story .blk:hover { background: var(--panel2); }
+  #story .blk.now { background: #1c2430; border-left-color: var(--gem); color: var(--ink); }
+  #story .blk .tag { font: 650 10.5px/1.3 var(--mono); color: var(--ink3); margin-right: 6px; }
+  #story .blk pre { margin: var(--s1) 0 0; font: 10.5px/1.15 var(--mono); white-space: pre;
+    overflow-x: auto; color: var(--ink3); }
+  #folds { display: grid; gap: var(--s2); align-content: start; }
+  #folds details { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r2);
+    padding: var(--s2) var(--s3); }
+  #folds summary { cursor: pointer; color: var(--ink2); font-size: 13px; }
+  #folds summary:hover { color: var(--ink); }
+  #folds pre { margin: var(--s2) 0 0; font: 11px/1.35 var(--mono); white-space: pre-wrap;
+    overflow-wrap: anywhere; max-height: 340px; overflow: auto; }
+  #checkbox .ok { color: var(--ok-ink); } #checkbox .bad { color: var(--veto-ink); font-weight: 650; }
+  #checkbox div { font-size: var(--f2); line-height: 1.6; }
+  #stagetable { margin-top: var(--s2); overflow-x: auto; }
+
+  /* ------------------------------------------------------------ responsive */
+  @media (max-width: 1250px) {
+    main, body.nocode main { grid-template-columns: 1fr; }
+    #bottom { grid-template-columns: 1fr; }
+    #worldpane, #turnpane { border-right: 0; border-bottom: 1px solid var(--line); }
+    #evnav { margin-left: 0; }
+    #evnow { min-width: 0; text-align: left; }
+  }
+  @media (max-width: 620px) {
+    header, #timeline, #narration, #bottom { padding-left: var(--s3); padding-right: var(--s3); }
+    main > section { padding: var(--s3) var(--s3); }
+    #pixelframe { padding: var(--s2); min-height: 220px; }
+    #runswitch { margin-left: 0; width: 100%; }
+    #turnlabel { font-size: var(--f2); }
+    #turnslider { flex-basis: 100%; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="toprow">
+    <h1>MiniHack codewm — run 뷰어</h1>
+    <span class="tagline">LLM이 ASCII 화면만 보고 다음 수를 제안하고, 자기가 쓴 파이썬 월드 모델을 반박당할 때마다 고쳐 쓴 기록</span>
+    <div id="runswitch"></div>
+  </div>
+  <div class="chips" id="chips"></div>
+  <details id="intro">
+    <summary>처음이라면 — 이 화면 읽는 법 · 단축키</summary>
+    <div class="cols">
+      <div>
+        <h4>무슨 게임인가</h4>
+        <p>MiniHack(NetHack 축소판) Sokoban 체인입니다. 임무는 <b id="introMission"></b>
+        위 <b>게임 화면</b>은 MiniHack의 16px 타일로 그린 <b>오프라인 복원</b>이고, 그 아래
+        접힌 <b>관측 기록</b>이 에이전트가 실제로 받은 색 없는 문자 화면입니다.</p>
+        <h4>누가 플레이했나</h4>
+        <p>codewm의 arm <b id="introArm"></b>. 제안자 모델이 한 번에 최대 20수짜리 <b>코스</b>를
+        답하고, 월드 모델(파이썬 프로그램)이 계획·거부·예측 중 arm이 정한 몫을 합니다.</p>
+      </div>
+      <div>
+        <h4>두 개의 시계</h4>
+        <p><b>ask</b>(제안 1회 또는 repair 1회)가 결정의 시계, <b>턴</b>이 세계의 시계입니다.
+        제안 한 번이 수십 턴을 만들기 때문에 타임라인이 스테이지·ask·턴·주요 순간
+        네 줄로 나뉩니다. ←/→는 <b>턴</b>을 움직입니다.</p>
+        <h4>그림이 매 턴 바뀌는 이유</h4>
+        <p>타일 화면은 run을 오프라인에서 다시 돌려 <b>모든 턴</b>을 복원한 것입니다. 반면
+        ASCII는 run이 <b>기록에 남긴 턴</b>에만 존재하므로, 없는 턴은 마지막 관측을
+        그대로 두고 <b>추정</b>으로 표시합니다 — 없는 프레임을 그려내지 않습니다.</p>
+      </div>
+      <div>
+        <h4>단축키</h4>
+        <table class="keys">
+          <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>턴 ±1</td></tr>
+          <tr><td><kbd>Shift</kbd>+<kbd>←</kbd>/<kbd>→</kbd></td><td>턴 ±10</td></tr>
+          <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>이전/다음 <b>ask</b> 경계</td></tr>
+          <tr><td><kbd>,</kbd> <kbd>.</kbd></td><td>이전/다음 <b>스테이지</b></td></tr>
+          <tr><td><kbd>e</kbd> / <kbd>Shift</kbd>+<kbd>e</kbd></td><td>다음/이전 <b>주요 순간</b></td></tr>
+          <tr><td><kbd>Space</kbd></td><td>재생 / 일시정지</td></tr>
+          <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>처음 / 마지막 턴</td></tr>
+        </table>
+        <p style="margin-top:8px">아래 <b>정합성 점검</b> 폴드에 저널·steps·transcript·buffer·repairs·픽셀
+        재생을 서로 대조한 결과가 있습니다. 하나라도 어긋난 페이지는 배포하지 않습니다.</p>
+      </div>
+    </div>
+  </details>
+</header>
+
+<div id="timeline">
+  <div id="ctl">
+    <div class="grp">
+      <button id="prev" title="이전 턴 (←)">◀</button>
+      <button id="play" class="primary" title="재생 / 일시정지 (Space)">▶ 재생</button>
+      <button id="next" title="다음 턴 (→)">▶</button>
+      <select id="speed" title="재생 속도">
+        <option value="240">1×</option><option value="90" selected>3×</option><option value="30">10×</option>
+      </select>
+      <label class="toggle" title="그림이 앞 턴과 똑같은 턴은 건너뛴다 — 재생이 정지 화면이 아니라 장면이 된다">
+        <input type="checkbox" id="onlychanged" checked>변화 있는 턴만</label>
+    </div>
+    <span id="turnlabel"></span>
+    <input type="range" id="turnslider" min="0" value="0">
+  </div>
+  <div class="lanes">
+    <div id="stagelane"></div>
+    <div id="asktrack"></div>
+    <div id="turnwrap"><canvas id="turncanvas"></canvas><div id="turncursor"></div><div id="turntip" hidden></div></div>
+    <div id="events"></div>
+  </div>
+  <div id="legend">
+    <span title="제안자 모델에게 코스를 물어본 호출"><i class="k-proposal"></i>ask 제안</span>
+    <span title="월드 모델이 반박당해 프로그램을 새로 받아온 호출"><i class="k-repair"></i>ask repair</span>
+    <span class="sep">|</span>
+    <span title="게임이 행동을 받아들인 턴"><i style="background:var(--ok)"></i>성공</span>
+    <span title="게임이 행동을 거부한 턴 (벽 등)"><i style="background:var(--refused)"></i>거부</span>
+    <span title="보상이 들어온 턴"><i style="background:var(--reward)"></i>보상</span>
+    <span title="플레이어가 죽은 턴"><i style="background:var(--death)"></i>사망</span>
+    <span title="월드 모델이 새 프로그램을 받은 턴"><i style="background:var(--repair)"></i>repair</span>
+    <span class="sep">|</span>
+    <span class="muted">턴 띠는 픽셀 한 칸에 여러 턴을 모아 칠한다 — 마우스를 올리면 그 턴</span>
+    <span id="evnav">주요 순간
+      <button id="evprev" title="이전 주요 순간 (Shift+E)">◀</button>
+      <button id="evnext" title="다음 주요 순간 (E)">▶</button>
+      <b id="evnow"></b></span>
+  </div>
+</div>
+
+<div id="narration">
+  <div id="narwho"></div>
+  <div id="narwhy"></div>
+</div>
+
+<main>
+  <!-- ① The board, and it moves: the tile picture is a verified offline replay
+       with a frame for every turn. The ascii below it is the run's own record —
+       the thing the agent was actually handed — and says so when it is stale. -->
+  <section id="worldpane">
+    <div class="panetitle" id="boardtitle"></div>
+    <div id="boardhead"></div>
+    <div id="pixelframe">
+      <canvas id="boardcanvas"></canvas>
+      <div id="pixelmiss" hidden></div>
+    </div>
+    <div id="boardstatus"></div>
+    <div id="boardtools">
+      <label class="toggle" title="직전 턴과 달라진 칸에 테두리를 친다"><input type="checkbox" id="showdiff" checked>변화 칸</label>
+      <label class="toggle" title="이번 결정(ask) 동안 지나간 자리를 점으로 남긴다 — 같은 칸에 오래 머물수록 점이 진해진다"><input type="checkbox" id="showtrail" checked>궤적</label>
+      <span class="key"><span class="sw" style="border-color:#ffd166"></span>바뀐 칸</span>
+      <span class="key"><span class="sw" style="border-color:var(--reward-ink)"></span>핏 채움</span>
+      <span class="key"><span class="sw" style="border-color:#fff"></span>플레이어</span>
+      <span class="key"><span class="sw" style="border-color:var(--ok-ink)"></span>→ 이번 수 (성공)</span>
+      <span class="key"><span class="sw" style="border-color:var(--veto-ink)"></span>⊣ 이번 수 (거부) · ×N = 같은 수 N턴째</span>
+      <span class="key muted"><span class="sw" style="border-color:rgba(108,215,255,.55)"></span>궤적 — 진할수록 오래 머묾</span>
+    </div>
+    <details class="fold" id="asciifold" open>
+      <summary>ASCII 화면 — 에이전트의 관측 형식 (이 턴 실제로 봤는지는 배지에)</summary>
+      <div id="asciihead"></div>
+      <div class="asciibody" id="asciibody"><div id="boardmsgline"></div><pre id="boardpre"></pre></div>
+      <details class="fold" id="glyphfold" style="margin-top:8px"><summary>글자 뜻 (색은 이 뷰어가 입힌 읽기 보조)</summary>
+        <div id="boardlegend"></div></details>
+    </details>
+    <details class="fold" id="pixelfold">
+      <summary>이 그림은 로그에 없다 — 어떻게 만들었나</summary>
+      <div id="pixelnote"></div>
+    </details>
+  </section>
+
+  <!-- ② What happened this turn, and which decision is responsible for it. -->
+  <section id="turnpane">
+    <div class="panetitle">이 턴 · 결정</div>
+    <div id="turndetail"></div>
+  </section>
+
+  <!-- ③ The program that was actually running at this turn. -->
+  <section id="codepane">
+    <div class="panetitle" id="codetitle"></div>
+    <div id="codetabs"></div>
+    <div id="codemeta"></div>
+    <pre id="codebody"></pre>
+  </section>
+</main>
+
+<div id="bottom">
+  <div>
+    <div class="panetitle">제안자와의 대화 — 스크러버를 따라갑니다 (클릭하면 그 턴으로)</div>
+    <div id="story"></div>
+  </div>
+  <div id="folds">
+    <details id="stagesfold"><summary>스테이지별 성적표 (chain이면 여러 줄)</summary>
+      <div id="stagetable"></div></details>
+    <details id="checkfold"><summary>정합성 점검 — 이 페이지가 스스로를 대조한 결과</summary>
+      <div id="checkbox" style="margin-top:8px"></div></details>
+    <details><summary>transcript 전문 (제안자가 실제로 읽고 쓴 텍스트)</summary>
+      <pre id="rawtranscript"></pre></details>
+    <details><summary>실행 명령 · config</summary>
+      <pre id="command"></pre><pre id="config"></pre></details>
+  </div>
+</div>
+
+<script src="./run_chain_verified_a0_seed0.js"></script>
+<script src="./run_chain_verified_a1_seed0.js"></script>
+<script src="./run_chain_verified_a2_seed0.js"></script>
+<script src="./run_chain_verified_a3_seed0.js"></script>
+<script>
+const RUNS = window.MINIHACK_RUNS || [];
+const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+// Rewards here are small and often negative: "+-0.001" was the old bug.
+const fmtR = (x) => (x > 0 ? "+" : "") + Number(Number(x).toFixed(3));
+// buffer agreement arrives as a raw float (0.9831932773109243); three digits is
+// every digit that means anything here.
+const fmtRatio = (x) => (typeof x === "number" ? Number(x.toFixed(3)) : (x ?? "-"));
+
+// ---------------------------------------------------------------- palette
+// NetHack draws with characters, not colours. This map is a reading aid the
+// viewer adds; the agent saw only the glyphs. Grouped the way a player reads a
+// screen — where you can walk, where you must not, what is worth picking up.
+const GLYPHS = {
+  "@": ["#7ee2a0", "플레이어(나)"],
+  ">": ["#ffd166", "내려가는 계단 (목표)"], "<": ["#e0a03c", "올라가는 계단"],
+  ".": ["#6b6252", "바닥"], "#": ["#8a7f6a", "복도/통로"],
+  "|": ["#4c5464", "벽"], "-": ["#4c5464", "벽"],
+  "+": ["#b8763e", "문 / 주문서"],
+  "^": ["#ef4444", "함정 (구덩이 등)"],
+  "}": ["#4f8fd0", "물/용암"], "{": ["#4f8fd0", "분수"], "~": ["#4f8fd0", "물결"],
+  "`": ["#9a8f80", "바위/조각상"], "0": ["#9a8f80", "쇠공"],
+  "$": ["#ffd166", "금"], "*": ["#6cd7ff", "보석/돌"],
+  "%": ["#d18f5a", "음식"], ")": ["#c8ccd4", "무기"], "[": ["#c8ccd4", "갑옷"],
+  "(": ["#c8ccd4", "도구"], "!": ["#c1a8ff", "물약"], "?": ["#dfe2e8", "두루마리"],
+  "/": ["#c1a8ff", "완드"], "=": ["#c1a8ff", "반지"], '"': ["#c1a8ff", "부적"],
+  "_": ["#cfd3da", "제단"], "\\": ["#ffd166", "왕좌"],
+};
+const MONSTER = ["#f0806a", "몬스터/생물"];
+const UNKNOWN = ["#8a90a0", "그 밖의 글자"];
+function glyph(ch) {
+  if (GLYPHS[ch]) return GLYPHS[ch];
+  if (/[A-Za-z]/.test(ch)) return MONSTER;
+  return UNKNOWN;
+}
+// A board is `message? + map rows + status`. The status line is the one that
+// starts with HP:. The message is prose, and prose is what a map row never is:
+// two runs of letters with a space between them.
+const PROSE = /[A-Za-z]{3,}[ ,'!.?]+[A-Za-z]{3,}/;
+function splitBoard(text) {
+  const lines = (text || "").split("\n");
+  let status = "";
+  if (lines.length && /^\s*HP:/.test(lines[lines.length - 1])) status = lines.pop();
+  let message = "";
+  if (lines.length > 1 && PROSE.test(lines[0])) message = lines.shift();
+  return { message, rows: lines, status };
+}
+
+let RUN = RUNS[0];
+let ti = 0;                 // env turn — the primary clock
+let codePinned = null;      // a clicked version tab stops the panel following the scrubber
+let codeView = "diff";
+
+const turn = () => RUN.turns[ti] || null;
+// Whether the player died on this turn. The journal's own `dead` bit comes from
+// `env.player_dead`, which the MiniHack adapter does not define, so on these
+// runs it is false everywhere — while NLE's `end_status` (its own StepStatus
+// enum: -1 aborted / 0 running / 1 death) is right there in the step record and
+// says DEATH. Both are read, so neither arm's convention is the one that counts.
+const DEATH = 1;
+const died = (t) => !!(t && (t.dead || (t.info && t.info.end_status === DEATH)));
+const stageOf = (t) => RUN.stages[(t && t.stage) || 0] || { name: "?" };
+const nTurns = () => RUN.turns.length;
+// "MiniHack-Sokoban2b-v1" -> "2b"; anything else keeps a positional name.
+function stageTag(stage, index) {
+  const m = /([0-9]+ *[ab])/i.exec(String(stage.name || ""));
+  return m ? m[1].replace(/\s/g, "").toLowerCase() : `S${index + 1}`;
+}
+
+// ------------------------------------------------------- replayed frames
+// The replay knows the board of every turn; `turnFrames[t]` is that frame.
+// Older payloads (or an --no-pixels build) only carry the per-board join, so
+// both paths stay here and the pane says which one it is standing on.
+function frameForTurn(t) {
+  const px = RUN.pixels;
+  if (!px) return -1;
+  if (px.turnFrames && t >= 0 && t < px.turnFrames.length) {
+    const gi = px.turnFrames[t];
+    return gi == null ? -1 : gi;
+  }
+  const row = RUN.turns[t];
+  if (!row || row.board == null || row.board < 0) return -1;
+  const gi = px.byBoard[row.board];
+  return gi === undefined ? -1 : gi;
+}
+function metaOf(t) {
+  const px = RUN.pixels;
+  if (!px || !px.turnMeta || t < 0 || t >= px.turnMeta.length) return null;
+  const [mi, si, ax, ay] = px.turnMeta[t];
+  return { msg: px.msgs[mi] || "", status: px.statuses[si] || "", ax, ay };
+}
+// NetHack hands back a wiped screen once the game is over, and its status line
+// is the tell: `HP: 0/0  Gold: 0  Time: 0`. The ascii pane spots the same thing
+// through `blank`, but only when the *recorded* board is the wiped one — on the
+// turn a stage dies, the record can hold the next stage's opening board while
+// the replay (correctly) holds the wiped screen, and a black rectangle is not a
+// picture of anything.
+function endScreen(t) {
+  const row = RUN.turns[t];
+  if (!row) return false;
+  if (row.blank) return true;
+  const m = metaOf(t);
+  return !!(m && /^HP: 0\/0\b/.test(m.status));
+}
+// The frame actually drawn for turn t: a wiped screen stands on the last turn
+// that showed a world.
+function shownFrame(t) {
+  if (endScreen(t)) {
+    for (let k = t - 1; k >= 0; k--) {
+      if (!endScreen(k) && frameForTurn(k) >= 0) return { gi: frameForTurn(k), from: k };
+    }
+    const open = RUN.pixels && RUN.pixels.stageOpenFrames;
+    if (open && open.length) return { gi: open[0], from: "opening" };
+  }
+  return { gi: frameForTurn(t), from: null };
+}
+
+// ---------------------------------------------------------------- board
+const boardPre = document.getElementById("boardpre");
+const boardMsgLine = document.getElementById("boardmsgline");
+// The ascii the agent's own view prints, for turn t. The replay has one for
+// every turn and it is the *same* text the run recorded wherever the run
+// recorded one (that equality is what `verify()` proves, character for
+// character). Without a replay the only ascii there is is the record's, stale
+// flag and all.
+function asciiOf(t) {
+  const px = RUN.pixels;
+  const m = metaOf(t);
+  if (px && px.turnMaps && px.maps && m && t >= 0 && t < px.turnMaps.length) {
+    return { message: m.msg, rows: (px.maps[px.turnMaps[t]] || "").split("\n"), status: m.status };
+  }
+  const row = RUN.turns[t];
+  return splitBoard((row && RUN.boards[row.board]) || "");
+}
+function paintBoard(board, note, m) {
+  boardMsgLine.textContent = "";
+  if (!board || !board.rows || !board.rows.length) {
+    boardPre.innerHTML = `<span class="sentence">${esc(note || "이 턴에 기록된 보드가 없다")}</span>`;
+    return;
+  }
+  const { message, rows, status } = board;
+  // The cell this turn pushed into. On a refused turn the agent's screen is
+  // character-for-character identical to the turn before — that is the
+  // observation, and it is not the viewer's business to fake movement into it.
+  // What the viewer may do is what it already does with colour, which the pane
+  // says out loud is its own reading aid: mark where the move went.
+  const row = RUN.turns[ti];
+  const dir = row && DIRS[String(row.action)];
+  let tx = -1, ty = -1;
+  if (dir && m && m.ax >= 0) { tx = m.ax + dir[0]; ty = m.ay + dir[1]; }
+  const body = rows.map((line, y) =>
+    Array.from(line).map((ch, x) => {
+      const target = x === tx && y === ty;
+      if (ch === " " && !target) return " ";
+      const [color] = glyph(ch);
+      const cls = ch === "@" ? "me" : target ? (row.ok ? "went" : "bumped") : "";
+      return `<span${cls ? ` class="${cls}"` : ""} style="color:${color}">${esc(ch)}</span>`;
+    }).join("")).join("\n");
+  boardMsgLine.textContent = message;
+  boardPre.innerHTML = body + (status ? `\n<span class="status">${esc(status)}</span>` : "");
+}
+
+// ---------------------------------------------------------------- pixels
+// The same board as MiniHack would have drawn it — reconstructed offline by
+// replaying the run (see replay_pixels.py) and verified against every board the
+// run wrote down. The agent never saw this: it was given `view: text`.
+// Frames are index grids over one tile atlas, so a whole run of NetHack screens
+// costs ~200KB instead of gigabytes of PNG.
+const canvas = document.getElementById("boardcanvas");
+const pixelFrame = document.getElementById("pixelframe");
+let atlas = null;             // the tile strip, once decoded
+let atlasFor = null;
+
+function ensureAtlas() {
+  const px = RUN.pixels;
+  if (!px) { atlas = null; atlasFor = null; return; }
+  if (atlasFor === RUN.id) return;
+  atlasFor = RUN.id;
+  atlas = new Image();
+  atlas.onload = () => { if (atlasFor === RUN.id) render(); };
+  atlas.src = px.atlas;
+}
+function cellsOf(px, gi) {
+  if (!px._cells) px._cells = [];
+  if (px._cells[gi]) return px._cells[gi];
+  const raw = atob(px.grids[gi]);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  px._cells[gi] = px.wide ? new Uint16Array(bytes.buffer) : bytes;
+  return px._cells[gi];
+}
+// The cells that changed since the previous turn — the one cue that tells a
+// reader *where* to look on a 26x17 board. Only meaningful between frames of
+// the same shape (a stage change redraws everything, which is not news).
+const CHANGE_CAP = 64;
+function changedCells(gi, prevGi, w, h) {
+  if (prevGi < 0 || prevGi === gi) return null;
+  const px = RUN.pixels;
+  const [pw, ph] = px.shapes[prevGi];
+  if (pw !== w || ph !== h) return null;
+  const now = cellsOf(px, gi), before = cellsOf(px, prevGi);
+  const out = [];
+  for (let i = 0; i < now.length; i++) {
+    // Past a handful of cells this is a scene change (a light going up, a level
+    // redrawn), and outlining half the board tells the reader nothing.
+    if (now[i] !== before[i]) { out.push(i); if (out.length > CHANGE_CAP) return null; }
+  }
+  return out;
+}
+// Where the agent walked under the decision that governs this turn, and how
+// often it stood on each cell — a run that spends 20 turns pushing at the same
+// wall says so as a darkening dot, which is the thing the old page could not
+// tell a reader at all.
+function trailCells(gi, w, h) {
+  const px = RUN.pixels;
+  if (!px || !px.turnMeta) return [];
+  const a = askAt(ti);
+  const from = a ? a.turn : Math.max(0, ti - 20);
+  const visits = new Map();
+  for (let k = from; k < ti; k++) {
+    const fi = frameForTurn(k);
+    if (fi < 0) continue;
+    const [fw, fh] = px.shapes[fi];
+    if (fw !== w || fh !== h) continue;   // another level entirely
+    const m = metaOf(k);
+    if (!m || m.ax < 0) continue;
+    const cell = m.ay * w + m.ax;
+    visits.set(cell, (visits.get(cell) || 0) + 1);
+  }
+  return [...visits];
+}
+// The move this turn *tried* to make, drawn on the board.
+//
+// Without it a run stands still on screen for stretches the game never moved
+// through: a0 spends 79% of its turns inside a run of ≥5 identical frames, the
+// worst of them 48 turns of pushing east into the same wall. Those turns are not
+// "nothing happened" — they are the run's whole story — and the map cannot show
+// them because a refused move changes no cell. So the arrow says which way the
+// agent pushed, its colour says whether the world let it, and a refused push
+// carries the count of how many turns in a row it has been repeating the same
+// refused move. Nothing here is inferred: `action`, the `ok` bit and the
+// player's cell are all in the record.
+const DIRS = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0],
+  ne: [1, -1], nw: [-1, -1], se: [1, 1], sw: [-1, 1] };
+function repeatsOf(t) {
+  const row = RUN.turns[t];
+  if (!row) return 1;
+  let n = 1;
+  for (let k = t - 1; k >= 0; k--) {
+    const p = RUN.turns[k];
+    if (p.action !== row.action || p.ok !== row.ok) break;
+    n++;
+    if (n > 99) break;
+  }
+  return n;
+}
+function drawAttempt(ctx, m, w, h, tile) {
+  const row = RUN.turns[ti];
+  const dir = row && DIRS[String(row.action)];
+  if (!dir) return;
+  const cx = m.ax * tile + tile / 2, cy = m.ay * tile + tile / 2;
+  const reach = tile * 0.95;
+  const tipX = cx + dir[0] * reach, tipY = cy + dir[1] * reach;
+  const ok = row.ok;
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = ok ? "rgba(126,226,160,.95)" : "rgba(240,128,106,.95)";
+  ctx.lineWidth = Math.max(2, tile * 0.14);
+  ctx.shadowColor = "rgba(0,0,0,.85)"; ctx.shadowBlur = 3;
+  ctx.beginPath();
+  ctx.moveTo(cx + dir[0] * tile * 0.3, cy + dir[1] * tile * 0.3);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+  // arrow head, or the flat bar of a move the world refused
+  ctx.beginPath();
+  if (ok) {
+    const back = tile * 0.3, side = tile * 0.26;
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(tipX - dir[0] * back - dir[1] * side, tipY - dir[1] * back - dir[0] * side);
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(tipX - dir[0] * back + dir[1] * side, tipY - dir[1] * back + dir[0] * side);
+  } else {
+    const side = tile * 0.34;
+    ctx.moveTo(tipX - dir[1] * side, tipY - dir[0] * side);
+    ctx.lineTo(tipX + dir[1] * side, tipY + dir[0] * side);
+  }
+  ctx.stroke();
+  if (!ok) {
+    const n = repeatsOf(ti);
+    if (n > 1) {
+      // "this is the Nth turn in a row of the same refused move" — the one thing
+      // a frozen map can never say for itself
+      const label = `×${n}`;
+      ctx.font = `600 ${Math.max(9, Math.round(tile * 0.62))}px "SF Mono", Consolas, monospace`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const lx = tipX + dir[0] * tile * 0.75, ly = tipY + dir[1] * tile * 0.75;
+      const pad = tile * 0.18, tw = ctx.measureText(label).width;
+      ctx.fillStyle = "rgba(10,13,20,.88)";
+      ctx.fillRect(lx - tw / 2 - pad, ly - tile * 0.34, tw + pad * 2, tile * 0.68);
+      ctx.fillStyle = "#f0a68f";
+      ctx.fillText(label, lx, ly);
+    }
+  }
+  ctx.restore();
+}
+// Returns true when the tile board is actually on screen.
+function paintPixels(gi, prevGi, hot, metaTurn) {
+  const px = RUN.pixels;
+  if (!px || gi < 0) return false;
+  if (!atlas || !atlas.complete || !atlas.naturalWidth) return false;
+  const [w, h] = px.shapes[gi];
+  if (!w || !h) return false;
+  const cells = cellsOf(px, gi);
+  const tile = px.tile;
+  canvas.width = w * tile;
+  canvas.height = h * tile;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const t = cells[y * w + x];
+      ctx.drawImage(atlas, t * tile, 0, tile, tile, x * tile, y * tile, tile, tile);
+    }
+  }
+  // where it has been under this decision
+  if (document.getElementById("showtrail").checked) {
+    for (const [i, visits] of trailCells(gi, w, h)) {
+      const x = (i % w) * tile, y = Math.floor(i / w) * tile;
+      // one dot per cell, drawn once, its weight the number of visits — not a
+      // pile of translucent circles whose alpha happens to add up
+      ctx.fillStyle = `rgba(108,215,255,${clamp(0.16 + 0.05 * (visits - 1), 0.16, 0.55)})`;
+      ctx.beginPath();
+      ctx.arc(x + tile / 2, y + tile / 2, tile * (visits > 3 ? 0.22 : 0.17), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  // what changed this turn
+  if (document.getElementById("showdiff").checked) {
+    const changed = changedCells(gi, prevGi, w, h);
+    if (changed) {
+      ctx.strokeStyle = hot ? "#7ee2a0" : "#ffd166";
+      ctx.lineWidth = 2;
+      for (const i of changed) {
+        ctx.strokeRect((i % w) * tile + 1, Math.floor(i / w) * tile + 1, tile - 2, tile - 2);
+      }
+    }
+  }
+  // and where the player is standing — of the turn this *frame* belongs to,
+  // which on a wiped end-of-game screen is the turn being stood in for.
+  const m = metaOf(metaTurn);
+  if (m && m.ax >= 0 && m.ax < w && m.ay < h) {
+    drawAttempt(ctx, m, w, h, tile);
+    ctx.save();
+    ctx.shadowColor = "rgba(255,255,255,.9)"; ctx.shadowBlur = 6;
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+    ctx.strokeRect(m.ax * tile + 1, m.ay * tile + 1, tile - 2, tile - 2);
+    ctx.restore();
+  }
+  fitCanvas(w, h, tile);
+  return true;
+}
+// The board is the hero: it takes the whole column, up to 3x the tile art's own
+// size, and never overflows its frame in either direction.
+function fitCanvas(w, h, tile) {
+  const style = getComputedStyle(pixelFrame);
+  const avail = pixelFrame.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  // Height is capped against the viewport, not a constant: stacked on a narrow
+  // screen the board gets the whole column, and 440px of it would be a stamp in
+  // the middle of 1,200px of nothing.
+  const maxH = clamp(window.innerHeight * 0.55, 260, 560);
+  const scale = Math.min(avail / (w * tile), maxH / (h * tile), 3);
+  canvas.style.width = `${Math.max(1, Math.floor(w * tile * scale))}px`;
+  canvas.style.height = `${Math.max(1, Math.floor(h * tile * scale))}px`;
+}
+// The standing disclaimer, now one fold instead of six permanent lines: the
+// badge above the board carries the short form, this carries the argument.
+function renderPixelNote() {
+  const px = RUN.pixels;
+  const v = (px && px.verified) || {};
+  document.getElementById("pixelnote").innerHTML = px
+    ? `<b>이 그림은 로그에 없다.</b> run이 남긴 것은 ASCII뿐이고(<code>view: text</code>), 위 타일 화면은 ` +
+      `run의 <code>config.yaml</code>(레벨·시드·행동 집합)과 저널의 행동 열로 ` +
+      `<b>같은 게임을 오프라인에서 다시 돌려</b> 그린 복원이다. 재생한 <b>${v.turns ?? "?"}턴</b>은 기록된 ` +
+      `reward·ok·종료 플래그와 매 턴 일치했고, 기록에 남아 있는 보드 <b>${v.boards ?? "?"}개</b>와 ` +
+      `글자 단위로 대조해 전부 일치했다. 그래서 <b>모든 턴에 그림이 있다</b> — 아래 ASCII가 ` +
+      `기록되지 않은 턴에도. 다만 <b>에이전트가 받은 관측은 ASCII뿐</b>이고, 타일은 독자를 위한 복원이지 관측이 아니다.`
+    : `이 run은 픽셀 재생 없이 빌드됐다 — 아래 ASCII 관측만 있다.`;
+}
+
+// Which glyphs this run's boards actually use, grouped by colour, so the legend
+// only explains characters the reader can really see.
+function renderBoardLegend() {
+  if (!RUN._legend) {
+    const used = new Set();
+    for (const b of RUN.boards) {
+      const { rows } = splitBoard(b);
+      for (const row of rows) for (const ch of row) if (ch !== " ") used.add(ch);
+    }
+    const groups = new Map();
+    for (const ch of used) {
+      const [color, name] = glyph(ch);
+      if (!groups.has(name)) groups.set(name, { color, glyphs: [] });
+      groups.get(name).glyphs.push(ch);
+    }
+    RUN._legend = [...groups].map(([name, g]) => ({ name, color: g.color, glyphs: g.glyphs.sort().slice(0, 14).join(" ") }));
+  }
+  document.getElementById("boardlegend").innerHTML =
+    RUN._legend.map(({ color, name, glyphs }) =>
+      `<span><i style="background:${color}"></i>${esc(name)} <span class="glyphs">${esc(glyphs)}</span></span>`).join("");
+}
+
+// ---------------------------------------------------------------- header
+function renderChips() {
+  const s = RUN.summary;
+  const first = stageTag(RUN.stages[0] || {}, 0);
+  const last = stageTag(RUN.stages[RUN.stages.length - 1] || {}, RUN.stages.length - 1);
+  const task = RUN.stages.length > 1
+    ? `chain ${RUN.stages.length}단계 <b>Sokoban${first}→${last}</b>`
+    : `<b>${esc(s.task)}</b>`;
+  const chips = [
+    `arm <b>${esc(s.arm)}</b>`,
+    task,
+    `모델 <b>${esc(s.model)}</b>`,
+    `턴 <b>${s.turns}</b>`,
+    `asks <b>${s.asks}</b>`,
+    `repair <b>${s.repairs}</b>`,
+    `reward <b>${Number(s.reward).toFixed(2)}</b>`,
+  ].map((h) => `<span class="chip">${h}</span>`);
+  chips.push(`<span class="chip ${s.solved ? "good" : "warn"}">${s.solved ? "성공" : "미해결"} ${s.solved}/${s.episodes}</span>`);
+  const bad = (RUN.check || []).filter((c) => c.hard && !c.ok).length;
+  chips.push(`<span class="chip ${bad ? "warn" : "good"}" title="아래 정합성 점검 폴드에 전문이 있다">정합성 ${bad ? `MISMATCH ${bad}건` : "OK"}</span>`);
+  // The run's numbers can be perfectly consistent and still not be a fact about
+  // the agent. When the task's own end condition never reached the agent, the
+  // page says so where the score is, not in a fold nobody opens.
+  if (s.goalGap) {
+    chips.push(`<span class="chip warn" title="${esc(s.goalGap)}">⚠ 과제 진술 불완전 — 이 점수는 에이전트 능력의 척도가 아니다</span>`);
+  }
+  document.getElementById("chips").innerHTML = chips.join("");
+  document.getElementById("introMission").textContent = RUN.mission || "-";
+  document.getElementById("introArm").textContent = s.arm || "-";
+}
+
+function renderStageTable() {
+  const rows = RUN.stages.map((s, i) => `<tr><td><a data-jump="${s.start}">${esc(s.name)}</a></td>
+    <td>턴 ${s.start}–${Math.max(s.start, s.end - 1)} (${s.end - s.start})</td>
+    <td>asks ${s.asks ?? "-"}</td><td>pits ${s.pits ?? "-"}</td>
+    <td>${s.solved ? "해결" : "미해결"}</td><td>reward ${Number(s.reward ?? 0).toFixed(2)}</td>
+    <td>${esc(s.stopped ?? "")}</td></tr>`).join("");
+  const table = document.getElementById("stagetable");
+  table.innerHTML = `<table class="grid"><tr><th>stage</th><th>턴</th><th>asks</th><th>pits</th>
+    <th>결과</th><th>reward</th><th>중단 사유</th></tr>${rows}</table>`;
+  table.querySelectorAll("[data-jump]").forEach((el) => {
+    el.onclick = () => { goTo(Number(el.dataset.jump)); };
+  });
+}
+
+function renderCheck() {
+  document.getElementById("checkbox").innerHTML = (RUN.check || []).map((c) =>
+    `<div><span class="${c.hard ? (c.ok ? "ok" : "bad") : "muted"}">${c.hard ? (c.ok ? "[OK]" : "[!!]") : "[i]"}</span>
+     <b>${esc(c.name)}</b> — ${esc(c.detail)}</div>`).join("") || '<div class="muted">기록 없음</div>';
+}
+
+// ---------------------------------------------------------------- lanes
+const askTrack = document.getElementById("asktrack");
+const stageLane = document.getElementById("stagelane");
+const turnCanvas = document.getElementById("turncanvas");
+const turnWrap = document.getElementById("turnwrap");
+const turnCursor = document.getElementById("turncursor");
+const turnTip = document.getElementById("turntip");
+
+function askClass(a) {
+  return a.kind === "proposal" ? "k-proposal"
+    : "k-repair" + (String(a.repairKind || "").endsWith(":rejected") ? " rejected" : "");
+}
+function renderAskTrack() {
+  askTrack.innerHTML = "";
+  RUN.asks.forEach((a) => {
+    const seg = document.createElement("div");
+    seg.className = `seg ${askClass(a)}`;
+    seg.style.flex = `${Math.max(1, a.until - a.turn)} 1 0`;
+    seg.title = a.kind === "proposal"
+      ? `ask #${a.i} 제안 — 턴 ${a.turn}에서 ${a.course.length}수 제안, 다음 결정까지 ${a.until - a.turn}턴`
+      : `ask #${a.i} repair(${a.repairKind}) — 턴 ${a.turn}, 일치율 ${fmtRatio(a.before)} → ${fmtRatio(a.after)}`;
+    seg.onclick = () => goTo(a.turn);
+    askTrack.appendChild(seg);
+  });
+  if (!RUN.asks.length) askTrack.innerHTML = '<div class="muted" style="font-size:11px">기록된 ask 없음</div>';
+}
+// The chain, as a chain: eight named segments whose width is the turns they
+// took. This is what replaced the old vertical rules — a stage is now a place
+// you can click, not a line you have to interpret.
+function renderStageLane() {
+  stageLane.innerHTML = "";
+  const total = Math.max(1, nTurns());
+  RUN.stages.forEach((s, i) => {
+    const seg = document.createElement("div");
+    const span = Math.max(1, s.end - s.start);
+    seg.className = "sg" + (s.solved ? " solved" : (s.pits > 0 ? " pits" : ""));
+    seg.style.flex = `${span} 1 0`;
+    seg.textContent = span / total > 0.02 ? stageTag(s, i) : "";
+    seg.title = `${s.name} · 턴 ${s.start}–${Math.max(s.start, s.end - 1)} (${span}턴)`
+      + ` · asks ${s.asks ?? "-"} · pits ${s.pits ?? "-"} · ${s.solved ? "해결" : "미해결"}`
+      + (s.stopped ? ` · ${s.stopped}` : "");
+    seg.onclick = () => goTo(s.start);
+    stageLane.appendChild(seg);
+  });
+}
+
+// The turn band. One canvas, aggregated per pixel column: 3,000 DOM cells in
+// 1,400px was 0.45px each, which is a smear nobody can read or click.
+const BAND_H = 26;
+function turnTone(t) {
+  if (died(t)) return "dead";
+  if (t.repair) return "repair";
+  if (t.reward > 0.05) return "reward";
+  return t.ok ? "ok" : "refused";
+}
+const TONE_FILL = { ok: "#35563c", refused: "#5c4a1e", reward: "#2f9e63",
+  dead: "#b3312f", repair: "#6d51b8" };
+function drawTurnBand() {
+  const rect = turnWrap.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width));
+  const dpr = window.devicePixelRatio || 1;
+  turnCanvas.width = Math.round(width * dpr);
+  turnCanvas.height = Math.round(BAND_H * dpr);
+  const ctx = turnCanvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, BAND_H);
+  const n = nTurns();
+  if (!n) return;
+  for (let x = 0; x < width; x++) {
+    const lo = Math.floor((x / width) * n);
+    const hi = Math.max(lo + 1, Math.floor(((x + 1) / width) * n));
+    let ok = 0, seen = 0, top = null;
+    for (let t = lo; t < hi && t < n; t++) {
+      const tone = turnTone(RUN.turns[t]);
+      seen++;
+      if (tone === "ok") ok++;
+      // A rare, loud turn must survive being averaged with 3 quiet ones.
+      if (tone === "dead") top = "dead";
+      else if (tone === "repair" && top !== "dead") top = "repair";
+      else if (tone === "reward" && top !== "dead" && top !== "repair") top = "reward";
+    }
+    if (!seen) continue;
+    if (top) ctx.fillStyle = TONE_FILL[top];
+    else {
+      // the rest of the band reads as "how much of this stretch actually moved
+      // the world": khaki (all refused) through green (all accepted)
+      const f = ok / seen;
+      const c0 = [92, 74, 30], c1 = [53, 86, 60];
+      ctx.fillStyle = `rgb(${c0.map((v, i) => Math.round(v + (c1[i] - v) * f)).join(",")})`;
+    }
+    ctx.fillRect(x, 0, 1, BAND_H);
+  }
+  // stage boundaries, on top of everything
+  ctx.fillStyle = "#6cd7ff";
+  RUN.stages.forEach((s, i) => {
+    if (!i) return;
+    ctx.fillRect(Math.round((s.start / n) * width), 0, 1, BAND_H);
+  });
+}
+function moveCursor() {
+  const n = Math.max(1, nTurns() - 1);
+  turnCursor.style.left = `${(ti / n) * 100}%`;
+}
+function turnAtX(clientX) {
+  const rect = turnWrap.getBoundingClientRect();
+  const f = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+  return clamp(Math.round(f * (nTurns() - 1)), 0, nTurns() - 1);
+}
+let scrubbing = false;
+turnWrap.addEventListener("pointerdown", (e) => {
+  scrubbing = true; turnWrap.setPointerCapture(e.pointerId); goTo(turnAtX(e.clientX));
+});
+turnWrap.addEventListener("pointerup", (e) => { scrubbing = false; turnWrap.releasePointerCapture(e.pointerId); });
+turnWrap.addEventListener("pointermove", (e) => {
+  if (scrubbing) goTo(turnAtX(e.clientX));
+  const t = turnAtX(e.clientX);
+  const row = RUN.turns[t];
+  if (!row) return;
+  turnTip.hidden = false;
+  turnTip.innerHTML =
+    `<b>턴 ${t}</b> · <span style="font-family:var(--mono)">${esc(row.action)}</span> · ` +
+    `${row.ok ? "성공" : "거부"}${row.reward ? ` · 보상 ${fmtR(row.reward)}` : ""}` +
+    `${row.repair ? ` · repair(${esc(row.repair)})` : ""}<br><span class="muted">${esc(stageOf(row).name)}</span>`;
+  const rect = turnWrap.getBoundingClientRect();
+  const x = clamp(e.clientX - rect.left, 0, rect.width);
+  turnTip.style.left = "0px";
+  const half = turnTip.offsetWidth / 2;
+  turnTip.style.left = `${clamp(x - half, -10, rect.width - half * 2 + 10)}px`;
+});
+turnWrap.addEventListener("pointerleave", () => { turnTip.hidden = true; });
+
+// -------------------------------------------------------------- events
+// The handful of moments a reader would actually jump to. Derived here, not
+// shipped: every input is already in the payload. The old row put a triangle on
+// every ask, which on a2 was 323 of them fused into a saw blade.
+const EVENT_STYLE = {
+  stage: ["e-stage", "스테이지 시작"], pit: ["e-pit", "핏 채움"],
+  repair: ["e-repair", "repair 채택"], rejected: ["e-rejected", "repair 거부됨"],
+  dead: ["e-dead", "사망"], veto: ["e-veto", "월드 모델 거부 강행"],
+  end: ["e-end", "에피소드 종료"],
+};
+const EVENT_CAP = 40;
+function eventsOf(run) {
+  if (run._events) return run._events;
+  const out = [];
+  run.stages.forEach((s, i) => {
+    if (i) out.push({ t: s.start, kind: "stage", label: `스테이지 ${stageTag(s, i)} 시작` });
+  });
+  run.turns.forEach((t) => {
+    if (t.reward > 0.05) out.push({ t: t.t, kind: "pit", label: `핏 채움 (보상 ${fmtR(t.reward)})` });
+    if (t.repair) out.push({ t: t.t, kind: "repair", label: `월드 모델 repair(${t.repair})` });
+    if (died(t)) out.push({ t: t.t, kind: "dead", label: "사망 — HP 0으로 에피소드 종료" });
+    if (String(t.reason || "").startsWith("vetoed but played anyway")) {
+      out.push({ t: t.t, kind: "veto", label: `거부 강행 — ${String(t.reason).split(": ").slice(1).join(": ")}` });
+    }
+    if ((t.terminated || t.truncated) && !died(t)) {
+      out.push({ t: t.t, kind: "end", label: t.terminated ? "에피소드 종료" : "스텝 소진" });
+    }
+  });
+  (run.programs || []).forEach((p) => {
+    if (p.rejected && p.turn >= 0) out.push({ t: p.turn, kind: "rejected", label: `repair 거부됨 (#${p.i} ${p.kind})` });
+  });
+  out.sort((a, b) => a.t - b.t || a.kind.localeCompare(b.kind));
+  // A run that somehow produces more than a screenful thins its most numerous
+  // class first, so the rare events never lose their place.
+  let trimmed = out;
+  if (out.length > EVENT_CAP) {
+    const counts = {};
+    out.forEach((e) => { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+    const worst = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+    const keepEvery = Math.ceil(counts[worst] / Math.max(1, EVENT_CAP - (out.length - counts[worst])));
+    let seen = 0;
+    trimmed = out.filter((e) => (e.kind === worst ? seen++ % keepEvery === 0 : true));
+  }
+  run._events = trimmed;
+  return trimmed;
+}
+function renderEvents() {
+  const lane = document.getElementById("events");
+  lane.innerHTML = "";
+  const n = Math.max(1, nTurns() - 1);
+  eventsOf(RUN).forEach((e, i) => {
+    const pin = document.createElement("b");
+    const [cls, name] = EVENT_STYLE[e.kind];
+    pin.className = cls;
+    pin.dataset.i = i;
+    pin.style.left = `${(e.t / n) * 100}%`;
+    pin.title = `${name} — 턴 ${e.t} · ${e.label}`;
+    pin.onclick = () => { goTo(e.t); flashEvent(i); };
+    lane.appendChild(pin);
+  });
+}
+function flashEvent(i) {
+  const pin = document.querySelector(`#events b[data-i="${i}"]`);
+  if (!pin) return;
+  pin.classList.remove("hot");
+  void pin.offsetWidth;
+  pin.classList.add("hot");
+  setTimeout(() => pin.classList.remove("hot"), 950);
+}
+function gotoEvent(dir) {
+  const events = eventsOf(RUN);
+  if (!events.length) return;
+  let i;
+  if (dir > 0) { i = events.findIndex((e) => e.t > ti); if (i < 0) i = events.length - 1; }
+  else { i = events.map((e) => e.t).filter((t) => t < ti).length - 1; if (i < 0) i = 0; }
+  goTo(events[i].t);
+  flashEvent(i);
+}
+function renderEventLabel() {
+  const events = eventsOf(RUN);
+  const here = events.filter((e) => e.t <= ti).length - 1;
+  const e = events[here];
+  document.getElementById("evnow").innerHTML = e
+    ? `<span class="muted">${here + 1}/${events.length}</span> ${esc(e.label)}`
+    : `<span class="muted">0/${events.length} — 아직 없음</span>`;
+}
+
+// ------------------------------------------------------------- narration
+// Why this turn played this move. The `reason` field is the run's own word for
+// it, and each word means a different *source* of the move — conflating them is
+// how the old page put "the proposal of turn 1615" on a turn that was following
+// the world model's route 773 turns later.
+function decisionOf(t) {
+  const reason = String((t && t.reason) || "");
+  const proposal = [...RUN.asks].reverse().find((x) => x.kind === "proposal" && x.turn <= ti) || null;
+  if (reason === "proposed" && proposal) {
+    const k = ti - proposal.turn + 1;
+    return { mode: "proposed", proposal,
+      why: `제안자 모델이 준 코스를 따라 — 턴 <b>${proposal.turn}</b>의 제안 <b>${k}/${proposal.course.length}</b>수째` };
+  }
+  if (reason === "following a planned route") {
+    return { mode: "route", proposal,
+      why: "<b>월드 모델이 계산한 경로</b>를 따라 — 제안자에게 묻지 않은 턴이다" };
+  }
+  if (reason.startsWith("exploring")) {
+    return { mode: "explore", proposal,
+      why: "<b>코스가 없어 무작위 탐색</b>" + (proposal ? ` — 마지막 제안은 ${ti - proposal.turn}턴 전(턴 ${proposal.turn})` : "") };
+  }
+  if (reason.startsWith("vetoed but played anyway")) {
+    const quote = reason.split(": ").slice(1).join(": ");
+    return { mode: "veto", proposal,
+      why: `월드 모델이 <b>거부</b>했지만 그대로 강행 — “${esc(quote)}”` };
+  }
+  if (reason.startsWith("probing")) {
+    return { mode: "probe", proposal, why: "프로그램이 <b>아직 못 본 수</b>를 확인하러" };
+  }
+  if (reason.startsWith("dead")) {
+    return { mode: "dead", proposal, why: "죽어서 <b>복구 명령</b>으로" };
+  }
+  return { mode: "other", proposal, why: reason ? esc(reason) : "(기록 없음)" };
+}
+// What the game itself said this turn. The replay has it per turn; without a
+// replay only an exact board carries one, and a stale board's message belongs
+// to some earlier turn, so it is not shown at all.
+function gameSaid(t) {
+  const m = metaOf(ti);
+  if (m) return m.msg;
+  const row = RUN.turns[ti];
+  if (row && row.exact) return splitBoard(RUN.boards[row.board] || "").message;
+  return "";
+}
+function renderNarration() {
+  const t = turn();
+  const said = gameSaid(t);
+  const bits = [
+    `<span class="who">턴 ${ti} / ${nTurns() - 1} · ${esc(stageTag(stageOf(t), (t && t.stage) || 0))}단계</span>`,
+    `<span class="doing">지금 수행 <b>${esc(t ? t.action : "-")}</b> — ${t && t.ok ? "게임이 받아들임" : "게임이 거부"}</span>`,
+  ];
+  if (t && t.reward) {
+    bits.push(t.reward > 0
+      ? `<span class="gain">보상 ${fmtR(t.reward)}</span>`
+      : `<span class="drop">보상 ${fmtR(t.reward)}</span>`);
+  }
+  if (t && t.repair) bits.push(`<span class="badge b-repair">repair(${esc(t.repair)})</span>`);
+  if (died(t)) bits.push(`<span class="badge b-dead">사망</span>`);
+  if (said) bits.push(`<span class="said">“${esc(said)}”</span>`);
+  document.getElementById("narwho").innerHTML = bits.join("");
+
+  const d = decisionOf(t);
+  const why = document.getElementById("narwhy");
+  why.className = d.mode === "other" ? "dim" : "";
+  why.innerHTML = `<span class="lead">왜 이 수인가 —</span> ${d.why}`;
+}
+
+// ------------------------------------------------------------ turn detail
+function badge(text, cls, title) {
+  return `<span class="badge ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
+}
+function renderTurnDetail() {
+  const t = turn();
+  const box = document.getElementById("turndetail");
+  if (!t) { box.innerHTML = '<div class="card muted">턴이 없다.</div>'; return; }
+  const parts = [];
+  const flags = [
+    t.ok ? badge("성공", "b-ok", "게임이 이 행동을 받아들였다 (게임 내 시계가 돌았다)")
+         : badge("거부", "b-refused", "게임이 이 행동을 거부했다 — 벽 등"),
+    t.reward ? badge(`보상 ${fmtR(t.reward)}`, t.reward > 0 ? "b-reward" : "b-obs") : "",
+    died(t) ? badge("사망", "b-dead", "NLE의 end_status가 DEATH(1) — HP가 0이 돼 에피소드가 끝난 턴") : "",
+    t.repair ? badge(`repair(${t.repair})`, "b-repair", "이 턴에 월드 모델이 반박당해 새 프로그램을 받았다") : "",
+    t.terminated ? badge("에피소드 종료", "b-obs") : "",
+    t.truncated ? badge("스텝 소진", "b-obs") : "",
+    t.trouble ? badge("학습 중단", "b-fail", t.trouble) : "",
+  ].filter(Boolean).join("");
+  const d = decisionOf(t);
+  parts.push(`<div class="card">
+    <h3>턴 ${t.t} <span class="tone">— 스테이지 <code>${esc(stageOf(t).name)}</code> 안의 ${t.turn}번째</span></h3>
+    <div class="bigact${t.ok ? "" : " refused"}">${esc(t.action)}</div>
+    <div class="flags">${flags}</div>
+    <div class="stats">
+      <span>왜 이 수인가</span><b>${d.why}</b>
+      <span>원문 reason</span><b class="muted">${esc(t.reason || "-")}</b>
+      <span>누적 reward</span><b>${Number(t.cum).toFixed(3)}</b>
+      <span>env info</span><b class="muted">${esc(JSON.stringify(t.info || {}))}</b>
+    </div>
+    ${t.trouble ? `<div class="lineage" style="color:var(--veto-ink);margin-top:6px">학습이 멈춘 이유: ${esc(t.trouble)}</div>` : ""}
+  </div>`);
+
+  const proposal = d.proposal;
+  if (proposal) {
+    const governs = d.mode === "proposed";
+    const span = [];
+    for (let k = proposal.turn; k < Math.min(nTurns(), proposal.until); k++) span.push(RUN.turns[k]);
+    const strip = span.map((x) =>
+      `<i class="s-${turnTone(x)}${x.t === ti ? " cur" : ""}" data-jump="${x.t}" title="턴 ${x.t} · ${esc(x.action)}"></i>`).join("");
+    const cells = proposal.course.map((cmd, j) => {
+      const played = span[j];
+      const cls = !played ? "muted" : played.dead ? "k-dead" : played.ok ? "" : "k-refused";
+      const jump = played ? ` data-jump="${played.t}"` : "";
+      return `<i class="${cls}${played && played.t === ti ? " cur" : ""}"${jump} title="${j + 1}번째 제안 수 ${esc(cmd)}${
+        played ? ` → 턴 ${played.t}에서 ${played.ok ? "성공" : "거부"}` : " → 실행되지 않음(코스가 버려짐)"}">${esc(cmd)}</i>`;
+    }).join("");
+    parts.push(`<div class="card">
+      <h3>${governs
+        ? `이 턴을 지배하는 결정 <span class="tone">— 턴 ${proposal.turn}의 제안</span>`
+        : `참고 — 마지막 제안 <span class="muted">(이 턴을 지배하지 않는다)</span>`}</h3>
+      <div class="lineage">제안 <b>${proposal.course.length}수</b> · 다음 결정까지 실제로 진행된 턴
+        <b>${proposal.until - proposal.turn}</b>${proposal.veto ? ` · 직전 거부 사유: ${esc(proposal.veto)}` : ""}
+        ${proposal.note ? " · 예측이 프롬프트에 함께 실림" : ""}</div>
+      ${span.length > 1 ? `<div class="stepstrip">${strip}</div>` : ""}
+      <div class="lineage" style="margin-top:8px">제안한 수 <span class="muted">(클릭하면 실제 실행된 턴으로)</span></div>
+      <div class="cmds">${cells}</div>
+    </div>`);
+  }
+  box.innerHTML = parts.join("");
+  box.querySelectorAll("[data-jump]").forEach((el) => {
+    el.onclick = () => goTo(Number(el.dataset.jump));
+  });
+}
+
+// ------------------------------------------------------------- code panel
+// The world model as of this turn. Same rule as the maze viewer's file panel:
+// only versions that already existed at this point may be shown, and a rejected
+// answer is labelled as one rather than passed off as the belief.
+function activeProgram(t) {
+  let found = null;
+  (RUN.programs || []).forEach((p) => { if (p.turn <= t && p.turn >= 0 && !p.rejected) found = p; });
+  return found;
+}
+function renderCode() {
+  const title = document.getElementById("codetitle");
+  const tabs = document.getElementById("codetabs");
+  const meta = document.getElementById("codemeta");
+  const body = document.getElementById("codebody");
+  const all = RUN.programs || [];
+  if (!all.length) return;   // the whole column is hidden for such a run
+  body.style.display = "";
+  const present = all.filter((p) => p.turn <= ti && p.turn >= 0);
+  if (!present.length) {
+    title.innerHTML = `월드 모델 <b>world.py</b> — 턴 ${ti} 시점에는 아직 없다 <span class="muted">(첫 프로그램은 턴 ${all[0].turn})</span>`;
+    tabs.innerHTML = ""; meta.textContent = "";
+    body.innerHTML = '<span class="d-skip">아직 프로그램이 합성되기 전이다 — warmup 동안은 세계를 보기만 한다.</span>';
+    return;
+  }
+  let cur = codePinned !== null ? all.find((p) => p.i === codePinned) : null;
+  if (!cur || cur.turn > ti) { codePinned = null; cur = null; }
+  if (!cur) cur = activeProgram(ti) || present[present.length - 1];
+
+  title.innerHTML = `월드 모델 <b>world.py</b> <span class="muted">— 턴 ${ti} 시점에 돌아가던 판</span>` +
+    (cur.rejected ? ` <span style="color:var(--veto-ink)">(거부돼 실제로는 쓰이지 않은 판)</span>` : "");
+  tabs.innerHTML = "";
+  present.forEach((p) => {
+    const b = document.createElement("button");
+    b.textContent = `#${p.i} ${p.kind}`;
+    b.className = p.i === cur.i ? "on" : "";
+    b.title = `턴 ${p.turn}에 합성 · 일치율 ${fmtRatio(p.before)} → ${fmtRatio(p.after)} · ${p.holds ? "모순 해소" : "여전히 불일치"}`;
+    b.onclick = () => { codePinned = p.i; renderCode(); };
+    tabs.appendChild(b);
+  });
+
+  const accepted = present.filter((p) => !p.rejected);
+  const prev = accepted.filter((p) => p.i < cur.i).pop();
+  const diff = lineDiff(prev ? prev.source : "", cur.source);
+  const plus = diff ? diff.filter((d) => d[0] === "add").length : 0;
+  const minus = diff ? diff.filter((d) => d[0] === "del").length : 0;
+  const toggle = diff
+    ? `<span id="codeview"><button data-view="diff" class="${codeView === "diff" ? "on" : ""}">이 repair의 변경</button>` +
+      `<button data-view="full" class="${codeView === "full" ? "on" : ""}">프로그램 전체</button></span>` : "";
+  meta.innerHTML =
+    `<a data-jump="${cur.turn}">턴 ${cur.turn}</a>에 합성 · kind <b>${esc(cur.kind)}</b> · ` +
+    `버퍼 일치율 ${fmtRatio(cur.before)} → <b>${fmtRatio(cur.after)}</b> · ${cur.holds ? "모순 해소됨" : '<span style="color:var(--refused-ink)">아직 불일치</span>'}` +
+    (codeView === "diff" && diff ? ` · <span class="plus">+${plus}</span> <span class="minus">−${minus}</span>${prev ? ` (#${prev.i} → #${cur.i})` : " (첫 판)"}` : "") +
+    toggle;
+  if (diff && codeView === "diff") body.innerHTML = renderDiff(diff);
+  else body.textContent = cur.source;
+  meta.querySelectorAll("[data-jump]").forEach((el) => {
+    el.onclick = () => { codePinned = null; goTo(Number(el.dataset.jump)); };
+  });
+  meta.querySelectorAll("[data-view]").forEach((el) => {
+    el.onclick = () => { codeView = el.dataset.view; renderCode(); };
+  });
+}
+
+// Line diff by longest common subsequence. World models are a few hundred lines,
+// so the quadratic table is cheap; past the cap the panel says so rather than
+// freezing the page.
+const DIFF_LINE_CAP = 3000;
+function lineDiff(before, after) {
+  const a = before === "" ? [] : before.split("\n");
+  const b = after === "" ? [] : after.split("\n");
+  if (a.length > DIFF_LINE_CAP || b.length > DIFF_LINE_CAP) return null;
+  const n = a.length, m = b.length;
+  const lcs = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { out.push(["ctx", a[i]]); i++; j++; }
+    else if (lcs[i + 1][j] >= lcs[i][j + 1]) { out.push(["del", a[i]]); i++; }
+    else { out.push(["add", b[j]]); j++; }
+  }
+  while (i < n) out.push(["del", a[i++]]);
+  while (j < m) out.push(["add", b[j++]]);
+  return out;
+}
+const DIFF_CONTEXT = 3;
+function renderDiff(diff) {
+  if (!diff) return '<span class="d-skip">파일이 너무 커서 변경만 추려내지 못했다 — "프로그램 전체"로 본다</span>';
+  if (!diff.some((d) => d[0] !== "ctx")) return '<span class="d-skip">이 판은 앞 판과 내용이 같다</span>';
+  const keep = new Array(diff.length).fill(false);
+  diff.forEach(([kind], index) => {
+    if (kind === "ctx") return;
+    for (let k = index - DIFF_CONTEXT; k <= index + DIFF_CONTEXT; k++) if (k >= 0 && k < diff.length) keep[k] = true;
+  });
+  const rows = [];
+  let hidden = 0;
+  const flush = () => { if (hidden) rows.push(`<span class="d-skip">    ⋯ 바뀌지 않은 ${hidden}줄</span>`); hidden = 0; };
+  diff.forEach(([kind, text], index) => {
+    if (!keep[index]) { hidden++; return; }
+    flush();
+    const mark = kind === "add" ? "+" : kind === "del" ? "−" : " ";
+    rows.push(`<span class="d-${kind}"><span class="mark">${mark}</span>${esc(text) || " "}</span>`);
+  });
+  flush();
+  return rows.join("");
+}
+
+// ---------------------------------------------------------------- story
+const STORY_TAG = {
+  mission: "임무", vocab: "행동 목록", observation: "관측", asking: "질문",
+  proposal: "제안", played: "실행", veto: "거부", prediction: "예측", remark: "메모",
+};
+function renderStory() {
+  const story = document.getElementById("story");
+  story.innerHTML = (RUN.transcript || []).map((b, i) => {
+    const board = b.kind === "observation" ? `<pre>${esc(RUN.boards[b.board] || "")}</pre>` : "";
+    const text = b.kind === "observation" ? "제안자에게 보여준 화면" : b.text;
+    return `<div class="blk" data-i="${i}" data-turn="${b.turn}">
+      <span class="tag">턴 ${b.turn} · ${STORY_TAG[b.kind] || b.kind}</span>${esc(text)}${board}</div>`;
+  }).join("") || '<div class="muted">transcript가 비어 있다.</div>';
+  story.querySelectorAll("[data-turn]").forEach((el) => {
+    el.onclick = () => goTo(Number(el.dataset.turn));
+  });
+}
+function syncStory() {
+  const story = document.getElementById("story");
+  let first = null;
+  story.querySelectorAll(".blk").forEach((el) => {
+    const on = Number(el.dataset.turn) === ti;
+    el.classList.toggle("now", on);
+    if (on && !first) first = el;
+  });
+  if (first) {
+    const top = first.offsetTop - story.offsetTop - 8;
+    if (top < story.scrollTop || top > story.scrollTop + story.clientHeight - 40) story.scrollTop = top;
+  }
+}
+
+// ---------------------------------------------------------------- render
+function askAt(t) {   // the decision governing this turn
+  let found = null;
+  RUN.asks.forEach((a) => { if (a.turn <= t) found = a; });
+  return found;
+}
+function render() {
+  const t = turn();
+  document.getElementById("turnslider").value = ti;
+  document.getElementById("turnlabel").innerHTML =
+    `<span class="now">턴 ${ti}</span> / ${nTurns() - 1} · <span class="act">${esc(t ? t.action : "-")}</span>`;
+  moveCursor();
+  const a = askAt(ti);
+  [...askTrack.children].forEach((el, i) => el.classList.toggle("on", !!a && i === a.i));
+  [...stageLane.children].forEach((el, i) => el.classList.toggle("on", i === ((t && t.stage) || 0)));
+  renderEventLabel();
+
+  // ---- the tile board: this turn's own frame, always
+  const { gi, from } = shownFrame(ti);
+  const prev = ti > 0 ? shownFrame(ti - 1).gi : -1;
+  const hot = !!(t && t.reward > 0.05);
+  const metaTurn = (from === null || from === "opening") ? ti : from;
+  const drew = paintPixels(gi, prev, hot, metaTurn);
+  const pixelMiss = document.getElementById("pixelmiss");
+  canvas.hidden = !drew;
+  pixelMiss.hidden = drew || !!(RUN.pixels && atlas && !atlas.complete);
+  if (!drew) {
+    pixelMiss.textContent = RUN.pixels
+      ? "이 턴의 재생 프레임이 없다 — 아래 ASCII 관측이 이 턴의 기록이다"
+      : "이 run은 픽셀 재생 없이 빌드됐다 — 아래 ASCII 관측만 있다";
+  }
+  // Both panes stand on the same turn — the one the frame belongs to, which on
+  // a wiped end-of-game screen is the turn being stood in for.
+  const board = asciiOf(metaTurn);
+  const meta = metaOf(metaTurn);
+  paintBoard(board, "이 턴의 보드가 기록되지 않았다", meta);
+  document.getElementById("boardstatus").textContent =
+    drew ? (meta ? meta.status : board.status) : "";
+
+  const head = [];
+  if (RUN.pixels) {
+    const v = RUN.pixels.verified || {};
+    head.push(badge(`재생 — 오프라인 복원 · 기록 ${v.boards ?? "?"}건과 대조 검증`, "b-replay",
+      "run의 config·시드·행동 열로 같은 게임을 다시 돌려 그린 그림이다. 아래 '이 그림은 로그에 없다' 폴드에 근거가 있다."));
+  }
+  if (from !== null) {
+    head.push(badge("게임 종료 화면", "b-obs",
+      "게임이 끝난 뒤 NetHack은 빈 화면(HP: 0/0)을 돌려준다 — 이 턴 자체의 그림은 존재하지 않는다"));
+    head.push(badge(from === "opening" ? "대체: 첫 프레임" : `대체: 턴 ${from}의 프레임`, "b-obs"));
+  }
+  head.push(`<span class="muted" style="font-size:var(--f1)">스테이지 <b style="color:var(--ink2)">${esc(stageOf(t).name)}</b></span>`);
+  document.getElementById("boardtitle").innerHTML =
+    `게임 화면 <b>— 턴 ${ti} 실행 직후</b>`;
+  document.getElementById("boardhead").innerHTML = head.join("");
+
+  // Two different claims, and the pane must not blur them. *This is the board*
+  // — true of every turn once the replay is verified. *The agent was shown it* —
+  // true only of the turns the run recorded, which is a fact about the run and
+  // still comes from the run's own record.
+  const replayed = !!(RUN.pixels && RUN.pixels.turnMaps);
+  const stale = !replayed && !!(t && !t.exact && !t.blank);
+  document.getElementById("asciibody").classList.toggle("stale", stale);
+  const ascii = [];
+  if (from !== null) {
+    ascii.push(badge("게임 종료 화면", "b-obs"),
+      `<span>대신 ${from === "opening" ? "첫 프레임" : `턴 ${from}`}의 화면</span>`);
+  } else if (t && t.exact) {
+    ascii.push(badge("에이전트가 본 화면", "b-ok", RUN.summary.boardSource === "transcript"
+      ? "이 턴의 화면이 제안자에게 그대로 보여졌고, 그 텍스트가 기록에 남아 있다"
+      : "워크스페이스 버퍼에 이 턴의 보드가 그대로 남아 있다"));
+  } else if (replayed) {
+    ascii.push(badge("에이전트는 못 본 턴", "b-obs",
+      "이 턴의 화면 자체는 재생으로 정확히 복원됐다. 다만 제안자는 이 턴에 호출되지 않아 이 화면을 받지 못했다 — 코스대로 눈 감고 진행한 구간이다"));
+  } else {
+    ascii.push(badge("추정", "b-fail", "이 arm은 매 턴 보드를 남기지 않는다 — 마지막으로 실제 관측된 화면이다"));
+    ascii.push(`<span>마지막 관측: 턴 ${t && t.from >= 0 ? t.from : "?"}</span>`);
+  }
+  if (t && DIRS[String(t.action)]) {
+    const n = t.ok ? 1 : repeatsOf(ti);
+    ascii.push(`<span>이번 수 <b style="color:${t.ok ? "var(--ok-ink)" : "var(--veto-ink)"}">${esc(t.action)}</b>` +
+      `${t.ok ? " — 그 칸으로 이동" : " — 그 칸에서 막힘"}` +
+      (n > 1 ? ` · <b style="color:var(--veto-ink)">같은 수 ${n}턴째</b> (화면은 그대로다)` : "") + `</span>`);
+  }
+  ascii.push(`<span class="muted">${replayed ? "매 턴 재생 복원 · 기록된 턴과 글자 단위 일치 검증" : `출처 ${esc(RUN.summary.boardSource)}`}</span>`);
+  document.getElementById("asciihead").innerHTML = ascii.join(" ");
+
+  renderNarration();
+  renderTurnDetail();
+  renderCode();
+  syncStory();
+}
+
+// ---------------------------------------------------------------- controls
+function goTo(t) {
+  const next = clamp(Number(t) || 0, 0, nTurns() - 1);
+  if (next === ti) { render(); return; }
+  ti = next; codePinned = null; render();
+}
+function step(delta) {
+  const next = ti + delta;
+  if (next < 0 || next >= nTurns()) return false;
+  ti = next; codePinned = null; render();
+  return true;
+}
+// Playback: on most turns the world does not move (a0 refuses 82% of them), so
+// "변화 있는 턴만" walks to the next turn whose picture actually differs. That
+// is what turns a 2,946-turn log into a ~540-frame film.
+// What is on screen, not just what is on the map: the arrow and its repeat
+// count are part of the picture, so a turn that only changed those is a turn
+// worth stopping on.
+function shot(t) {
+  const row = RUN.turns[t];
+  const m = metaOf(t);
+  const px = RUN.pixels;
+  const mapId = px && px.turnMaps ? px.turnMaps[t] : -1;
+  return `${frameForTurn(t)}|${mapId}|${row ? row.action : ""}|${row && row.ok ? 1 : 0}` +
+    `|${m ? `${m.ax},${m.ay}` : ""}|${row && !row.ok ? repeatsOf(t) : 0}`;
+}
+function nextDifferent(from, dir) {
+  const base = shot(from);
+  let k = from + dir;
+  while (k >= 0 && k < nTurns()) {
+    if (shot(k) !== base) return k;
+    k += dir;
+  }
+  return -1;
+}
+function advance() {
+  if (!document.getElementById("onlychanged").checked || !RUN.pixels) return step(1);
+  const k = nextDifferent(ti, 1);
+  if (k < 0) return step(1);
+  ti = k; codePinned = null; render();
+  return true;
+}
+document.getElementById("next").onclick = () => step(1);
+document.getElementById("prev").onclick = () => step(-1);
+document.getElementById("turnslider").oninput = (e) => goTo(Number(e.target.value));
+document.getElementById("showdiff").onchange = render;
+document.getElementById("showtrail").onchange = render;
+document.getElementById("evprev").onclick = () => gotoEvent(-1);
+document.getElementById("evnext").onclick = () => gotoEvent(1);
+
+let timer = null;
+const playBtn = document.getElementById("play");
+function stop() { clearInterval(timer); timer = null; playBtn.textContent = "▶ 재생"; }
+function start() {
+  playBtn.textContent = "⏸ 일시정지";
+  timer = setInterval(() => { if (!advance()) stop(); }, Number(document.getElementById("speed").value));
+}
+playBtn.onclick = () => (timer ? stop() : start());
+document.getElementById("speed").onchange = () => { if (timer) { stop(); start(); } };
+
+function askBoundary(dir) {
+  const turnsOf = RUN.asks.map((a) => a.turn);
+  const next = dir > 0 ? turnsOf.find((t) => t > ti) : [...turnsOf].reverse().find((t) => t < ti);
+  if (next !== undefined) goTo(next);
+}
+function stageJump(dir) {
+  const starts = RUN.stages.map((s) => s.start);
+  const next = dir > 0 ? starts.find((t) => t > ti) : [...starts].reverse().find((t) => t < ti);
+  if (next !== undefined) goTo(next);
+}
+window.addEventListener("keydown", (e) => {
+  if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key;
+  if (k === "ArrowRight") { e.preventDefault(); step(e.shiftKey ? 10 : 1); }
+  else if (k === "ArrowLeft") { e.preventDefault(); step(e.shiftKey ? -10 : -1); }
+  else if (k === " ") { e.preventDefault(); timer ? stop() : start(); }
+  else if (k === "]") { e.preventDefault(); askBoundary(1); }
+  else if (k === "[") { e.preventDefault(); askBoundary(-1); }
+  else if (k === ".") { e.preventDefault(); stageJump(1); }
+  else if (k === ",") { e.preventDefault(); stageJump(-1); }
+  else if (k === "e" || k === "E") { e.preventDefault(); gotoEvent(e.shiftKey ? -1 : 1); }
+  else if (k === "Home") { e.preventDefault(); goTo(0); }
+  else if (k === "End") { e.preventDefault(); goTo(nTurns() - 1); }
+});
+
+// The lanes are pixel-addressed, so they are redrawn when their width changes —
+// and only then: playback must move the cursor, nothing else.
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { drawTurnBand(); moveCursor(); render(); }, 120);
+});
+
+// ---------------------------------------------------------------- load
+function loadRun(index) {
+  stop();
+  RUN = RUNS[index];
+  ti = 0; codePinned = null;
+  // A run with no world model has no third column, which leaves the board so
+  // wide that the observation record reads better *beside* it than under it —
+  // and stops the decision column from ending in 300px of nothing.
+  const nocode = !(RUN.programs || []).length;
+  document.body.classList.toggle("nocode", nocode);
+  const host = document.getElementById(nocode ? "turnpane" : "worldpane");
+  host.appendChild(document.getElementById("asciifold"));
+  host.appendChild(document.getElementById("pixelfold"));
+  ensureAtlas();
+  renderPixelNote();
+  document.getElementById("turnslider").max = Math.max(0, nTurns() - 1);
+  document.getElementById("rawtranscript").textContent =
+    (RUN.transcript || []).map((b) => b.kind === "observation" ? `You see:\n${RUN.boards[b.board]}` : b.text).join("\n\n");
+  document.getElementById("command").textContent = RUN.command || "(기록 없음)";
+  document.getElementById("config").textContent = RUN.config || "";
+  [...document.getElementById("runswitch").children].forEach((b, i) => b.classList.toggle("active", i === index));
+  renderChips();
+  renderStageTable();
+  renderCheck();
+  renderStageLane();
+  renderAskTrack();
+  drawTurnBand();
+  renderEvents();
+  renderStory();
+  renderBoardLegend();
+  render();
+}
+const switcher = document.getElementById("runswitch");
+// "a2 · MiniHack-Sokoban1a-v1 · gpt-5.6-luna · seed0" is four buttons' worth of
+// text in one; the switcher shows what tells the runs apart and keeps the rest
+// in the tooltip.
+RUNS.forEach((run, i) => {
+  const b = document.createElement("button");
+  const bits = String(run.label).split(" · ");
+  b.textContent = bits.length > 2 ? `${bits[0]} · ${bits[bits.length - 1]}` : run.label;
+  b.title = run.label;
+  b.onclick = () => loadRun(i);
+  switcher.appendChild(b);
+});
+if (RUNS.length) loadRun(0);
+else document.body.insertAdjacentHTML("beforeend", '<p style="padding:20px">run 데이터가 없다 — build_site.sh를 먼저 돌린다.</p>');
+</script>
+</body>
+</html>
